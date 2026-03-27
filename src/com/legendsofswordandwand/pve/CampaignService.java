@@ -1,6 +1,7 @@
 package com.legendsofswordandwand.pve;
 
 import com.legendsofswordandwand.model.CampaignProgress;
+import com.legendsofswordandwand.model.CampaignProgress.CampaignStatus;
 import com.legendsofswordandwand.model.Hero;
 import com.legendsofswordandwand.model.HeroClass;
 import com.legendsofswordandwand.model.HeroFactory;
@@ -9,25 +10,22 @@ import com.legendsofswordandwand.model.Profile;
 import com.legendsofswordandwand.persistence.CampaignRepository;
 import com.legendsofswordandwand.pve.RoomGenerator.RoomType;
 
+import java.util.List;
+
 public class CampaignService {
 
     public static final int TOTAL_ROOMS = 30;
 
-    // Gold and experience rewards
     private static final double GOLD_LOSS_PERCENT = 0.10;
     private static final double EXP_LOSS_PERCENT  = 0.30;
 
-    // Experience needed to level: Exp(L) = Exp(L-1) + 500 + 75*L + 20*L^2
-    // We compute this dynamically in expToNextLevel()
-
     private final CampaignRepository campaignRepository;
-    private final HeroFactory heroFactory;
-    private final RoomGenerator roomGenerator;
-    private final InnService innService;
-    private final ScoreCalculator scoreCalculator;
+    private final HeroFactory        heroFactory;
+    private final RoomGenerator      roomGenerator;
+    private final InnService         innService;
+    private final ScoreCalculator    scoreCalculator;
 
-    public CampaignService(CampaignRepository campaignRepository,
-                           InnService innService) {
+    public CampaignService(CampaignRepository campaignRepository, InnService innService) {
         this.campaignRepository = campaignRepository;
         this.heroFactory        = new HeroFactory();
         this.roomGenerator      = new RoomGenerator();
@@ -35,7 +33,7 @@ public class CampaignService {
         this.scoreCalculator    = new ScoreCalculator();
     }
 
-    // Package-private for testing with injected dependencies
+    // Package-private: allows test injection of mock dependencies
     CampaignService(CampaignRepository campaignRepository,
                     RoomGenerator roomGenerator,
                     InnService innService,
@@ -52,10 +50,10 @@ public class CampaignService {
     // -------------------------------------------------------------------------
 
     /**
-     * Creates a new campaign for the given profile with a starting hero of the
-     * chosen class. Any existing incomplete campaign is overwritten.
+     * Creates a fresh campaign for the profile with a single starting hero of
+     * the chosen class. Overwrites any previously saved campaign for that profile.
      *
-     * @return the newly created CampaignProgress, or null if args are invalid
+     * @return the new CampaignProgress, or null if arguments are invalid
      */
     public CampaignProgress startNew(Profile profile, HeroClass heroClass) {
         if (profile == null || heroClass == null) {
@@ -70,11 +68,29 @@ public class CampaignService {
         Party party = new Party(profile.getUsername() + "'s Party");
         party.addHero(startingHero);
 
-        // Stage starts at 1 (rooms are 1-indexed), score starts at 0
-        CampaignProgress progress = new CampaignProgress(1, party, 0);
-
+        CampaignProgress progress = new CampaignProgress(profile.getUsername(), 1, party, 0);
         campaignRepository.saveCampaign(profile, progress);
         return progress;
+    }
+
+    // -------------------------------------------------------------------------
+    // UC5 — Exit PvE Campaign
+    // -------------------------------------------------------------------------
+
+    /**
+     * Saves the campaign and exits. Blocked if the player is currently IN_BATTLE.
+     *
+     * @return true if the campaign was saved and exit is allowed, false otherwise
+     */
+    public boolean exitCampaign(Profile profile, CampaignProgress progress) {
+        if (profile == null || progress == null) {
+            return false;
+        }
+        if (progress.getStatus() == CampaignStatus.IN_BATTLE) {
+            return false;
+        }
+        campaignRepository.saveCampaign(profile, progress);
+        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -82,9 +98,9 @@ public class CampaignService {
     // -------------------------------------------------------------------------
 
     /**
-     * Loads a saved campaign for the profile.
+     * Loads a previously saved campaign for the profile.
      *
-     * @return existing CampaignProgress or null if none exists
+     * @return the saved CampaignProgress, or null if none exists
      */
     public CampaignProgress loadCampaign(Profile profile) {
         if (profile == null) {
@@ -93,6 +109,9 @@ public class CampaignService {
         return campaignRepository.loadCampaign(profile);
     }
 
+    /**
+     * Returns true if the profile has a saved campaign that is not yet completed.
+     */
     public boolean hasIncompleteCampaign(Profile profile) {
         if (profile == null) {
             return false;
@@ -101,46 +120,22 @@ public class CampaignService {
     }
 
     // -------------------------------------------------------------------------
-    // UC5 — Exit PvE Campaign
-    // -------------------------------------------------------------------------
-
-    /**
-     * Saves campaign progress and marks it as exitable.
-     *
-     * NOTE: Battle-state blocking (cannot exit during battle) requires a
-     * status field on CampaignProgress — pending Luxsan's update.
-     * Once added, check: if (progress.getStatus() == CampaignStatus.IN_BATTLE) return false;
-     *
-     * @return true if save succeeded
-     */
-    public boolean exitCampaign(Profile profile, CampaignProgress progress) {
-        if (profile == null || progress == null) {
-            return false;
-        }
-
-        // TODO: uncomment once CampaignProgress.getStatus() is available
-        // if (progress.getStatus() == CampaignStatus.IN_BATTLE) {
-        //     return false;
-        // }
-
-        campaignRepository.saveCampaign(profile, progress);
-        return true;
-    }
-
-    // -------------------------------------------------------------------------
     // Room navigation
     // -------------------------------------------------------------------------
 
     /**
-     * Advances the campaign to the next room and determines its type.
-     * If the campaign is already complete (30 rooms done), returns null.
+     * Determines the next room type and advances the stage counter.
+     * Sets campaign status to IN_BATTLE or IN_INN accordingly.
+     * Marks the campaign completed and returns null after room 30.
      *
-     * @return RoomType for the next room, or null if campaign is over
+     * @return RoomType.BATTLE, RoomType.INN, or null if campaign is over
      */
     public RoomType nextRoom(CampaignProgress progress) {
         if (progress == null || progress.isCampaignCompleted()) {
             return null;
         }
+
+        progress.advanceStage();
 
         if (progress.getCurrentStage() > TOTAL_ROOMS) {
             progress.completeCampaign();
@@ -148,12 +143,12 @@ public class CampaignService {
         }
 
         int cumulativeLevel = getCumulativeLevel(progress.getCurrentParty());
-        RoomType roomType = roomGenerator.generateRoom(cumulativeLevel);
+        RoomType roomType   = roomGenerator.generateRoom(cumulativeLevel);
 
-        progress.advanceStage();
-
-        if (progress.getCurrentStage() > TOTAL_ROOMS) {
-            progress.completeCampaign();
+        if (roomType == RoomType.BATTLE) {
+            progress.setStatus(CampaignStatus.IN_BATTLE);
+        } else {
+            progress.setStatus(CampaignStatus.IN_INN);
         }
 
         return roomType;
@@ -164,21 +159,23 @@ public class CampaignService {
     // -------------------------------------------------------------------------
 
     /**
-     * Called after a PvE battle victory.
-     * Distributes experience among surviving heroes and awards gold.
-     * Heroes that can level up will do so automatically.
+     * Called by BattleView when the player wins a PvE battle.
      *
-     * @param progress     the active campaign
-     * @param enemyParty   the defeated enemy party
+     * Distributes experience equally among surviving heroes using:
+     *   Exp per enemy = 50 * enemyLevel
+     *   Gold per enemy = 75 * enemyLevel
+     *
+     * After awarding exp, each surviving hero levels up as many times as
+     * their accumulated XP allows. Status is reset to BETWEEN_ROOMS.
+     *
+     * @param progress   the active campaign
+     * @param enemyParty the defeated enemy party
      */
     public void onBattleVictory(CampaignProgress progress, Party enemyParty) {
         if (progress == null || enemyParty == null) {
             return;
         }
 
-        Party party = progress.getCurrentParty();
-
-        // Calculate total exp and gold from enemy party
         int totalExp  = 0;
         int totalGold = 0;
         for (Hero enemy : enemyParty.getHeroes()) {
@@ -186,36 +183,48 @@ public class CampaignService {
             totalGold += 75 * enemy.getLevel();
         }
 
-        // Divide exp among surviving heroes only
-        java.util.List<Hero> survivors = party.getAliveHeroes();
+        List<Hero> survivors = progress.getCurrentParty().getAliveHeroes();
         if (!survivors.isEmpty()) {
             int expPerHero = totalExp / survivors.size();
             for (Hero hero : survivors) {
-                awardExp(hero, expPerHero);
+                progress.awardExperience(hero, expPerHero);
+                progress.levelUpIfReady(hero);
             }
         }
 
         innService.addGold(totalGold);
+        progress.setStatus(CampaignStatus.BETWEEN_ROOMS);
     }
 
     /**
-     * Called after a PvE battle defeat.
-     * Player loses 10% gold and surviving heroes lose 30% of current-level exp.
-     * Returns player to the last inn (handled by the view layer).
+     * Called by BattleView when the player loses a PvE battle.
+     *
+     * Penalties applied:
+     *   - 10% of current gold is lost
+     *   - Surviving heroes lose 30% of their accumulated current-level XP
+     *     (heroes cannot lose levels, XP is clamped at 0)
+     *
+     * Status is reset to BETWEEN_ROOMS so the view can route back to the inn.
+     *
+     * @param progress the active campaign
      */
     public void onBattleDefeat(CampaignProgress progress) {
         if (progress == null) {
             return;
         }
 
-        // Lose 10% gold
+        // Deduct 10% gold
         int goldLoss = (int) (innService.getGold() * GOLD_LOSS_PERCENT);
         innService.deductGold(goldLoss);
 
-        // Surviving heroes lose 30% of their current-level exp
-        // Since Hero doesn't currently track exp-in-level, this is a no-op
-        // until the Hero class exposes currentExp / expToNextLevel.
-        // TODO: hero.deductCurrentLevelExp(EXP_LOSS_PERCENT) once available
+        // Deduct 30% of current-level XP from each surviving hero
+        for (Hero hero : progress.getCurrentParty().getAliveHeroes()) {
+            int currentExp = progress.getExperience(hero);
+            int penalty    = (int) (currentExp * EXP_LOSS_PERCENT);
+            progress.awardExperience(hero, -penalty);
+        }
+
+        progress.setStatus(CampaignStatus.BETWEEN_ROOMS);
     }
 
     // -------------------------------------------------------------------------
@@ -223,8 +232,8 @@ public class CampaignService {
     // -------------------------------------------------------------------------
 
     /**
-     * Calculates the final score at the end of a 30-room campaign.
-     * Should only be called once isCampaignCompleted() is true.
+     * Calculates the final campaign score once all 30 rooms are completed.
+     * Should only be called after isCampaignCompleted() returns true.
      */
     public int calculateFinalScore(CampaignProgress progress) {
         return scoreCalculator.calculate(progress);
@@ -234,6 +243,10 @@ public class CampaignService {
     // Helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Sums the levels of all heroes in the party.
+     * Used by RoomGenerator to determine encounter probability.
+     */
     public int getCumulativeLevel(Party party) {
         if (party == null) return 0;
         int total = 0;
@@ -241,25 +254,5 @@ public class CampaignService {
             total += hero.getLevel();
         }
         return total;
-    }
-
-    /**
-     * Experience required to reach the next level from level L.
-     * Formula: Exp(L) = Exp(L-1) + 500 + 75*L + 20*L^2
-     * Cumulative from level 1.
-     */
-    public int expToNextLevel(int currentLevel) {
-        int total = 0;
-        for (int l = 1; l <= currentLevel; l++) {
-            total += 500 + 75 * l + 20 * l * l;
-        }
-        return total;
-    }
-
-    private void awardExp(Hero hero, int exp) {
-        // Hero does not currently expose an addExperience() method.
-        // When Luxsan adds Hero.addExperience(int) and Hero.getExperience(),
-        // this method will call levelUp() when the threshold is crossed.
-        // TODO: hero.addExperience(exp); while (hero.getExperience() >= expToNextLevel(hero.getLevel())) hero.levelUp();
     }
 }

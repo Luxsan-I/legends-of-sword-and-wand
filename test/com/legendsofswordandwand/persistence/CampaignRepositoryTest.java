@@ -33,7 +33,7 @@ public class CampaignRepositoryTest {
         Party party = new Party("PvE Team");
         party.addHero(new Hero("Hero1", HeroClass.WARRIOR));
 
-        CampaignProgress progress = new CampaignProgress(2, party, 100);
+        CampaignProgress progress = new CampaignProgress(profile.getUsername(),2, party, 100);
         campaignRepository.saveCampaign(profile, progress);
 
         CampaignProgress loaded = campaignRepository.loadCampaign(profile);
@@ -48,7 +48,7 @@ public class CampaignRepositoryTest {
         Party party = new Party("PvE Team");
         party.addHero(new Hero("Hero1", HeroClass.WARRIOR));
 
-        CampaignProgress progress = new CampaignProgress(1, party, 50);
+        CampaignProgress progress = new CampaignProgress(profile.getUsername(), 1, party, 50);
         campaignRepository.saveCampaign(profile, progress);
 
         assertTrue(campaignRepository.hasIncompleteCampaign(profile));
@@ -59,7 +59,7 @@ public class CampaignRepositoryTest {
         Party party = new Party("PvE Team");
         party.addHero(new Hero("Hero1", HeroClass.WARRIOR));
 
-        CampaignProgress progress = new CampaignProgress(3, party, 200);
+        CampaignProgress progress = new CampaignProgress(profile.getUsername(),3, party, 200);
         progress.completeCampaign();
         campaignRepository.saveCampaign(profile, progress);
 
@@ -71,7 +71,7 @@ public class CampaignRepositoryTest {
         Party party = new Party("PvE Team");
         party.addHero(new Hero("Hero1", HeroClass.WARRIOR));
 
-        CampaignProgress progress = new CampaignProgress(2, party, 100);
+        CampaignProgress progress = new CampaignProgress(profile.getUsername(),2, party, 100);
         campaignRepository.saveCampaign(profile, progress);
 
         campaignRepository.deleteCampaign(profile);
