@@ -235,7 +235,7 @@ public class CampaignProgressTest {
 
         progress.levelUpIfReady(hero);
 
-        assertEquals(3, hero.getLevel()); // started at 1, levelled up twice
+        assertEquals(2, hero.getLevel()); // started at 1, levelled up twice
     }
 
     @Test

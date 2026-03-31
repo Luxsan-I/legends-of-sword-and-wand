@@ -156,4 +156,10 @@ public class Hero {
             defense += amount;
         }
     }
+
+    @Override
+    public String toString() {
+        return name + " [" + heroClass + "] Lvl " + level
+                + " HP:" + currentHp + "/" + maxHp;
+    }
 }

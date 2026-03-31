@@ -10,21 +10,23 @@ import com.legendsofswordandwand.model.Profile;
 import javax.swing.*;
 import java.awt.*;
 import java.util.List;
+import java.util.Random;
 
 /**
  * PvE battle screen.
  *
- * Wraps a BattleSystem directly — no observer pattern needed since PvE
- * battle is single-player and synchronous. Buttons call BattleSystem
- * perform* methods and the view refreshes itself after each action.
+ * After each player action, an enemy AI loop runs automatically until it is
+ * the player's turn again or the battle ends. Enemy AI always attacks a
+ * random alive hero from the player's party.
  */
 public class BattleView extends JFrame {
 
-    private final BattleSystem battleSystem;
-    private final CampaignService campaignService;
+    private final BattleSystem     battleSystem;
+    private final CampaignService  campaignService;
     private final CampaignProgress progress;
-    private final Profile profile;
-    private final Party enemyParty;
+    private final Profile          profile;
+    private final Party            enemyParty;
+    private final Random           random = new Random();
 
     // Top labels
     private JLabel roomLabel;
@@ -131,15 +133,15 @@ public class BattleView extends JFrame {
 
         add(root);
 
-        // Wire up buttons
+        // Wire up player action buttons
         attackButton.addActionListener(e -> {
             Hero actor  = battleSystem.getCurrentHero();
             Hero target = (Hero) targetCombo.getSelectedItem();
             boolean ok  = battleSystem.performAttack(actor, target);
             if (ok) {
-                appendLog(actor.getName() + " attacks " + target.getName() + "!");
-                checkBattleOver();
-                refreshAll();
+                appendLog(actor.getName() + " attacks " + target.getName()
+                        + " for " + Math.max(1, actor.getAttack() - target.getEffectiveDefense()) + " damage!");
+                afterPlayerAction();
             }
         });
 
@@ -148,8 +150,7 @@ public class BattleView extends JFrame {
             boolean ok = battleSystem.performDefend(actor);
             if (ok) {
                 appendLog(actor.getName() + " defends! (+10 HP, +5 MP)");
-                checkBattleOver();
-                refreshAll();
+                afterPlayerAction();
             }
         });
 
@@ -159,8 +160,7 @@ public class BattleView extends JFrame {
             boolean ok  = battleSystem.performCastAbility(actor, target);
             if (ok) {
                 appendLog(actor.getName() + " casts an ability on " + target.getName() + "!");
-                checkBattleOver();
-                refreshAll();
+                afterPlayerAction();
             } else {
                 appendLog("Not enough mana!");
             }
@@ -171,7 +171,7 @@ public class BattleView extends JFrame {
             boolean ok = battleSystem.performWait(actor);
             if (ok) {
                 appendLog(actor.getName() + " waits.");
-                refreshAll();
+                afterPlayerAction();
             }
         });
     }
@@ -181,6 +181,47 @@ public class BattleView extends JFrame {
         area.setEditable(false);
         area.setBorder(BorderFactory.createTitledBorder(title));
         return area;
+    }
+
+    // -------------------------------------------------------------------------
+    // Enemy AI
+    // -------------------------------------------------------------------------
+
+    /**
+     * Called after every player action.
+     * Checks if the battle is over, then runs the enemy AI for all consecutive
+     * enemy turns until it is the player's turn again or the battle ends.
+     */
+    private void afterPlayerAction() {
+        if (checkBattleOver()) return;
+        runEnemyTurns();
+        refreshAll();
+    }
+
+    /**
+     * Executes enemy turns automatically until a player hero is next or the
+     * battle ends. Enemy AI always attacks a random alive player hero.
+     */
+    private void runEnemyTurns() {
+        while (!battleSystem.isBattleOver()) {
+            Hero current = battleSystem.getCurrentHero();
+            if (current == null) break;
+
+            // If it's the player's turn, stop and let the player act
+            if (battleSystem.getPartyOne().getHeroes().contains(current)) break;
+
+            // Enemy turn — pick a random alive player hero to attack
+            List<Hero> targets = battleSystem.getPartyOne().getAliveHeroes();
+            if (targets.isEmpty()) break;
+
+            Hero target = targets.get(random.nextInt(targets.size()));
+            int damage  = Math.max(1, current.getAttack() - target.getEffectiveDefense());
+            battleSystem.performAttack(current, target);
+            appendLog(current.getName() + " attacks " + target.getName()
+                    + " for " + damage + " damage!");
+
+            if (checkBattleOver()) return;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -228,7 +269,6 @@ public class BattleView extends JFrame {
         Hero current = battleSystem.getCurrentHero();
         if (current == null) return;
 
-        // Player heroes act against enemy party and vice versa
         boolean actorInPartyOne = battleSystem.getPartyOne().getHeroes().contains(current);
         Party enemySide = actorInPartyOne
                 ? battleSystem.getPartyTwo()
@@ -240,16 +280,15 @@ public class BattleView extends JFrame {
     }
 
     private void refreshActionButtons() {
-        boolean active  = !battleSystem.isBattleOver();
-        Hero current    = battleSystem.getCurrentHero();
-        boolean myTurn  = current != null
+        boolean active = !battleSystem.isBattleOver();
+        Hero current   = battleSystem.getCurrentHero();
+        boolean myTurn = current != null
                 && battleSystem.getPartyOne().getHeroes().contains(current);
 
         attackButton.setEnabled(active && myTurn);
         defendButton.setEnabled(active && myTurn);
         waitButton.setEnabled(active && myTurn);
-        castButton.setEnabled(active && myTurn
-                && current.getCurrentMana() >= 20);
+        castButton.setEnabled(active && myTurn && current.getCurrentMana() >= 20);
         targetCombo.setEnabled(active && myTurn);
     }
 
@@ -265,11 +304,14 @@ public class BattleView extends JFrame {
     // Battle-over handling
     // -------------------------------------------------------------------------
 
-    private void checkBattleOver() {
-        if (!battleSystem.isBattleOver()) return;
+    /**
+     * Checks if the battle is over and handles the outcome.
+     * @return true if the battle has ended
+     */
+    private boolean checkBattleOver() {
+        if (!battleSystem.isBattleOver()) return false;
 
         disableActions();
-
         boolean playerWon = !battleSystem.getPartyOne().isDefeated();
 
         SwingUtilities.invokeLater(() -> {
@@ -284,12 +326,12 @@ public class BattleView extends JFrame {
                 if (onDefeat != null) onDefeat.run();
             }
         });
+
+        return true;
     }
 
     private void showLevelUpMessages() {
         for (Hero hero : progress.getCurrentParty().getHeroes()) {
-            // Level-up messages are logged; levelUpIfReady was already called
-            // inside onBattleVictory via CampaignProgress
             appendLog(hero.getName() + " is now level " + hero.getLevel() + ".");
         }
     }
