@@ -316,14 +316,37 @@ public class BattleView extends JFrame {
 
         SwingUtilities.invokeLater(() -> {
             if (playerWon) {
+                int totalExp  = enemyParty.getHeroes().stream()
+                        .mapToInt(h -> 50 * h.getLevel()).sum();
+                int totalGold = enemyParty.getHeroes().stream()
+                        .mapToInt(h -> 75 * h.getLevel()).sum();
+
                 campaignService.onBattleVictory(progress, enemyParty);
                 appendLog("Victory! Experience and gold awarded.");
                 showLevelUpMessages();
-                if (onVictory != null) onVictory.run();
+
+                BattleResultView result = new BattleResultView(
+                        true,
+                        battleSystem.getPartyOne(),
+                        battleSystem.getPartyTwo(),
+                        totalGold, totalExp, 0,
+                        () -> { if (onVictory != null) onVictory.run(); });
+                result.setVisible(true);
+
             } else {
+                int goldBefore = campaignService.getInnService().getGold();
                 campaignService.onBattleDefeat(progress);
+                int goldLost = goldBefore - campaignService.getInnService().getGold();
+
                 appendLog("Defeated... Gold and experience lost. Returning to inn.");
-                if (onDefeat != null) onDefeat.run();
+
+                BattleResultView result = new BattleResultView(
+                        false,
+                        battleSystem.getPartyOne(),
+                        battleSystem.getPartyTwo(),
+                        0, 0, goldLost,
+                        () -> { if (onDefeat != null) onDefeat.run(); });
+                result.setVisible(true);
             }
         });
 

@@ -255,4 +255,8 @@ public class CampaignService {
         }
         return total;
     }
+
+    public InnService getInnService() {
+        return innService;
+    }
 }
